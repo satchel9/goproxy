@@ -1,7 +1,8 @@
 // Copyright 2019 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
-// Package proxy implements the HTTP protocols for serving a Go module proxy.
+
+// Package sumdb implements sumdb handler proxy.
 package sumdb
 
 import (
@@ -35,12 +36,17 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, supported := range supportedSumDB {
-		uri := fmt.Sprintf("/sumdb/%s/supported", supported)
-		if r.URL.Path == uri {
-			w.WriteHeader(http.StatusOK)
-			return
+	if strings.HasSuffix(r.URL.Path, "/supported") {
+		for _, supported := range supportedSumDB {
+			uri := fmt.Sprintf("/sumdb/%s/supported", supported)
+			if r.URL.Path == uri {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 		}
+
+		w.WriteHeader(http.StatusGone)
+		return
 	}
 
 	p := "https://" + strings.TrimPrefix(r.URL.Path, "/sumdb/")

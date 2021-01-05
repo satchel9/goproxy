@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/tls"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -19,9 +20,10 @@ import (
 	"github.com/goproxyio/goproxy/v2/sumdb"
 )
 
+// ListExpire list data expire data duration.
 const ListExpire = 5 * time.Minute
 
-// A RouterOps provides the proxy host and the external pattern
+// RouterOptions provides the proxy host and the external pattern
 type RouterOptions struct {
 	Pattern      string
 	Proxy        string
@@ -95,6 +97,53 @@ func NewRouter(srv *Server, opts *RouterOptions) *Router {
 					}
 				}
 			}
+
+			// support 302 status code.
+			if r.StatusCode == http.StatusFound {
+				loc := r.Header.Get("Location")
+				if loc == "" {
+					return fmt.Errorf("%d response missing Location header", r.StatusCode)
+				}
+
+				// TODO: location is relative.
+				_, err := url.Parse(loc)
+				if err != nil {
+					return fmt.Errorf("failed to parse Location header %q: %v", loc, err)
+				}
+				resp, err := http.Get(loc)
+				if err != nil {
+					return err
+				}
+				defer resp.Body.Close()
+
+				var buf []byte
+				if strings.Contains(resp.Header.Get("Content-Encoding"), "gzip") {
+					gr, err := gzip.NewReader(resp.Body)
+					if err != nil {
+						return err
+					}
+					defer gr.Close()
+					buf, err = ioutil.ReadAll(gr)
+					if err != nil {
+						return err
+					}
+					resp.Header.Del("Content-Encoding")
+				} else {
+					buf, err = ioutil.ReadAll(resp.Body)
+					if err != nil {
+						return err
+					}
+				}
+				resp.Body = ioutil.NopCloser(bytes.NewReader(buf))
+				if buf != nil {
+					file := filepath.Join(opts.DownloadRoot, r.Request.URL.Path)
+					os.MkdirAll(path.Dir(file), os.ModePerm)
+					err = renameio.WriteFile(file, buf, 0666)
+					if err != nil {
+						return err
+					}
+				}
+			}
 			return nil
 		}
 		rt.pattern = opts.Pattern
@@ -103,6 +152,7 @@ func NewRouter(srv *Server, opts *RouterOptions) *Router {
 	return rt
 }
 
+// Direct decides whether a path should directly access.
 func (rt *Router) Direct(path string) bool {
 	if rt.pattern == "" {
 		return false
@@ -153,9 +203,8 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					log.Printf("------ --- %s [proxy]\n", r.URL)
 					rt.proxy.ServeHTTP(w, r)
 					return
-				} else {
-					ctype = "text/plain; charset=UTF-8"
 				}
+				ctype = "text/plain; charset=UTF-8"
 			} else {
 				ext := path.Ext(what)
 				switch ext {
